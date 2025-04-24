@@ -1,0 +1,437 @@
+---
+import Layout from '../layouts/Layout.astro';
+---
+
+<Layout>
+  <div class="dashboard">
+    <header>
+      <h1>Fertility Analytics Dashboard</h1>
+    </header>
+
+    <div class="metrics-grid">
+      <div class="metric-card">
+        <h3>Total Sessions</h3>
+        <p class="metric-value" id="totalSessions">Loading...</p>
+      </div>
+      <div class="metric-card">
+        <h3>Unique Users</h3>
+        <p class="metric-value" id="uniqueUsers">Loading...</p>
+      </div>
+      <div class="metric-card">
+        <h3>Avg. Session Length</h3>
+        <p class="metric-value" id="avgSessionLength">Loading...</p>
+      </div>
+    </div>
+
+    <div class="charts-grid">
+      <div class="chart-card pie-chart">
+        <h3>Platform Distribution</h3>
+        <canvas id="platformChart"></canvas>
+      </div>
+      <div class="chart-card pie-chart">
+        <h3>Treatment Protocols</h3>
+        <canvas id="protocolChart"></canvas>
+      </div>
+      <div class="chart-card bar-chart">
+        <h3>Treatment Phases</h3>
+        <canvas id="phaseChart"></canvas>
+      </div>
+      <div class="chart-card bar-chart">
+        <h3>Previous Treatments</h3>
+        <canvas id="treatmentsChart"></canvas>
+      </div>
+    </div>
+  </div>
+</Layout>
+
+<script>
+  document.addEventListener('DOMContentLoaded', initializeDashboard);
+
+  async function initializeDashboard() {
+    try {
+      const Chart = await import('chart.js/auto');
+      const data = await getData();
+      showTopNumbers(data);
+      createCharts(data);
+    } catch (error) {
+      console.error('Error:', error);
+      showError();
+    }
+  }
+
+  function showError() {
+    ['totalSessions', 'uniqueUsers', 'avgSessionLength'].forEach(id => {
+      document.getElementById(id).textContent = 'Error loading data';
+    });
+  }
+
+  async function getData() {
+    const response = await fetch('/src/data/raw_data.json');
+    if (!response.ok) throw new Error('Failed to load data');
+    
+    const rawData = await response.json();
+    const data = {
+      totalSessions: rawData.length,
+      uniqueUsers: new Set(rawData.map(session => session.aura_user_id)).size,
+      avgSessionLength: calculateAverageSessionLength(rawData),
+      platforms: countOccurrences(rawData, 'platform'),
+      phases: countOccurrences(rawData, 'phase'),
+      protocols: countOccurrences(rawData, 'protocol'),
+      treatments: countPreviousTreatments(rawData)
+    };
+    
+    return data;
+  }
+
+  function calculateAverageSessionLength(data) {
+    const validSessions = data.filter(session => session.session_length);
+    if (!validSessions.length) return 0;
+    
+    const total = validSessions.reduce((sum, session) => 
+      sum + parseInt(session.session_length), 0);
+    return Math.round(total / validSessions.length);
+  }
+
+  function countOccurrences(data, field) {
+    const counts = {};
+    
+    data.forEach(item => {
+      let value = item[field];
+      if (!value || value.trim() === '') {
+        value = 'Not Specified';
+      }
+      counts[value] = (counts[value] || 0) + 1;
+    });
+
+    return counts;
+  }
+
+  function countPreviousTreatments(data) {
+    const counts = {};
+    
+    data.forEach(item => {
+      if (!item.previous_treatments || item.previous_treatments.trim() === '') {
+        counts['Not Specified'] = (counts['Not Specified'] || 0) + 1;
+        return;
+      }
+
+      const treatments = item.previous_treatments.split(',');
+      treatments.forEach(treatment => {
+        const clean = treatment.trim();
+        if (clean) {
+          counts[clean] = (counts[clean] || 0) + 1;
+        }
+      });
+    });
+
+    return counts;
+  }
+
+  function showTopNumbers(data) {
+    document.getElementById('totalSessions').textContent = data.totalSessions;
+    document.getElementById('uniqueUsers').textContent = data.uniqueUsers;
+    document.getElementById('avgSessionLength').textContent = `${data.avgSessionLength}s`;
+  }
+
+  function createCharts(data) {
+    const commonPieOptions = {
+      plugins: {
+        legend: {
+          position: 'bottom',
+          labels: {
+            color: '#FFFFFF',
+            font: {
+              size: 14
+            },
+            padding: 20,
+            generateLabels: (chart) => {
+              const data = chart.data;
+              const total = data.datasets[0].data.reduce((sum, value) => sum + value, 0);
+              return data.labels.map((label, index) => ({
+                text: `${label} (${data.datasets[0].data[index]} - ${Math.round((data.datasets[0].data[index] / total) * 100)}%)`,
+                fillStyle: data.datasets[0].backgroundColor[index],
+                strokeStyle: data.datasets[0].borderColor,
+                lineWidth: data.datasets[0].borderWidth,
+                hidden: isNaN(data.datasets[0].data[index]),
+                index: index
+              }));
+            }
+          }
+        },
+        tooltip: {
+          callbacks: {
+            label: (context) => {
+              const total = context.dataset.data.reduce((sum, value) => sum + value, 0);
+              const percentage = Math.round((context.raw / total) * 100);
+              return `${context.raw} (${percentage}%)`;
+            }
+          }
+        }
+      }
+    };
+
+    const chartConfigs = {
+      platformChart: {
+        type: 'doughnut',
+        data: data.platforms,
+        colors: ['#FFB6C1', '#FF9AA2', '#E3A587', '#FFD1DC'],
+        options: commonPieOptions
+      },
+      phaseChart: {
+        type: 'bar',
+        data: data.phases,
+        colors: ['#F8C3CD', '#FADCD9', '#F9A7B0', '#E79F8C'],
+        options: {
+          indexAxis: 'y',
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              callbacks: {
+                label: (context) => {
+                  const total = context.dataset.data.reduce((sum, value) => sum + value, 0);
+                  const percentage = Math.round((context.raw / total) * 100);
+                  return `${context.raw} (${percentage}%)`;
+                }
+              }
+            }
+          },
+          scales: {
+            x: {
+              grid: { display: false },
+              ticks: { 
+                color: '#B3B3B3',
+                font: { size: 14 }
+              }
+            },
+            y: {
+              grid: { display: false },
+              ticks: {
+                color: '#B3B3B3',
+                font: { size: 14 },
+                padding: 10,
+                callback: function(value) {
+                  const label = this.getLabelForValue(value);
+                  const data = this.chart.data.datasets[0].data;
+                  const total = data.reduce((sum, val) => sum + val, 0);
+                  const count = data[value];
+                  const percentage = Math.round((count / total) * 100);
+                  return `${label} (${count} - ${percentage}%)`;
+                }
+              }
+            }
+          }
+        }
+      },
+      protocolChart: {
+        type: 'pie',
+        data: data.protocols,
+        colors: ['#FFB6C1', '#FF9AA2', '#E3A587', '#FFD1DC'],
+        options: commonPieOptions
+      },
+      treatmentsChart: {
+        type: 'bar',
+        data: data.treatments,
+        colors: ['#E3A587'],
+        options: {
+          indexAxis: 'y',
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              callbacks: {
+                label: (context) => {
+                  const total = context.dataset.data.reduce((sum, value) => sum + value, 0);
+                  const percentage = Math.round((context.raw / total) * 100);
+                  return `${context.raw} (${percentage}%)`;
+                }
+              }
+            }
+          },
+          scales: {
+            x: {
+              grid: { display: false },
+              ticks: { 
+                color: '#B3B3B3',
+                font: { size: 14 }
+              }
+            },
+            y: {
+              grid: { display: false },
+              ticks: {
+                color: '#B3B3B3',
+                font: { size: 14 },
+                padding: 10,
+                callback: function(value) {
+                  const label = this.getLabelForValue(value);
+                  const data = this.chart.data.datasets[0].data;
+                  const total = data.reduce((sum, val) => sum + val, 0);
+                  const count = data[value];
+                  const percentage = Math.round((count / total) * 100);
+                  return `${label} (${count} - ${percentage}%)`;
+                }
+              }
+            }
+          }
+        }
+      }
+    };
+
+    Object.entries(chartConfigs).forEach(([id, config]) => {
+      const ctx = document.getElementById(id);
+      if (!ctx) return;
+
+      const labels = Object.keys(config.data).filter(label => label !== 'undefined');
+      const values = labels.map(label => config.data[label]);
+
+      new Chart(ctx, {
+        type: config.type,
+        data: {
+          labels: labels,
+          datasets: [{
+            data: values,
+            backgroundColor: config.colors,
+            borderColor: '#282828',
+            borderWidth: 1
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          layout: {
+            padding: {
+              left: 10,
+              right: 10,
+              top: 10,
+              bottom: config.type === 'pie' || config.type === 'doughnut' ? 50 : 10
+            }
+          },
+          ...config.options
+        }
+      });
+    });
+  }
+</script>
+
+<style>
+  .dashboard {
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 2rem;
+    color: #ffffff;
+  }
+
+  header {
+    margin-bottom: 2rem;
+    text-align: center;
+  }
+
+  h1 {
+    font-size: 2.5rem;
+    font-weight: bold;
+    background: linear-gradient(90deg, #FFB6C1, #F4C2C2);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  .metrics-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 2rem;
+    margin-bottom: 3rem;
+  }
+
+  .metric-card {
+    background: #282828;
+    padding: 2rem;
+    border-radius: 0.5rem;
+    text-align: center;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+  }
+
+  .metric-card h3 {
+    color: #B3B3B3;
+    font-size: 1.1rem;
+    margin-bottom: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+
+  .metric-value {
+    font-size: 2.5rem;
+    font-weight: bold;
+    background: linear-gradient(90deg, #FFB6C1, #F4C2C2);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  .charts-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    grid-template-rows: auto auto;
+    gap: 2rem;
+    margin-top: 2rem;
+  }
+
+  .chart-card {
+    background: #282828;
+    padding: 2rem;
+    border-radius: 0.5rem;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    display: flex;
+    flex-direction: column;
+  }
+
+  .pie-chart {
+    height: 400px;
+  }
+
+  .bar-chart {
+    height: 600px;
+    grid-column: span 2;
+  }
+
+  .chart-card h3 {
+    color: #B3B3B3;
+    font-size: 1.25rem;
+    margin-bottom: 1.5rem;
+    text-align: center;
+    border-bottom: 1px solid #404040;
+    padding-bottom: 0.75rem;
+  }
+
+  .chart-card canvas {
+    flex: 1;
+  }
+
+  @media (max-width: 1200px) {
+    .dashboard {
+      padding: 1.5rem;
+    }
+    .pie-chart {
+      height: 350px;
+    }
+    .bar-chart {
+      height: 500px;
+    }
+  }
+
+  @media (max-width: 768px) {
+    .dashboard {
+      padding: 1rem;
+    }
+    .metrics-grid,
+    .charts-grid {
+      grid-template-columns: 1fr;
+      gap: 1.5rem;
+    }
+    .pie-chart,
+    .bar-chart {
+      height: 400px;
+      grid-column: span 1;
+    }
+    h1 {
+      font-size: 2rem;
+    }
+  }
+</style>
